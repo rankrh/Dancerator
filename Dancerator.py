@@ -21,6 +21,7 @@ import click
 # Constants
 
 def get_user_playlists(userid, spotify):
+    
     # Gets playlist data from Spotify
     playlist_data = spotify.user_playlists(userid)
     playlist_names = dict()
