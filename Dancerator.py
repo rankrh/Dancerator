@@ -20,7 +20,7 @@ import click
 # Defines Spotify API credentials
 # Constants
 
-def get_user_playlists(userid):
+def get_user_playlists(userid, spotify):
     # Gets playlist data from Spotify
     playlist_data = spotify.user_playlists(userid)
     playlist_names = dict()
@@ -28,7 +28,7 @@ def get_user_playlists(userid):
 
     return playlist_data
 
-def select_playlist(playlist_data):
+def select_playlist(playlist_data, username, spotify):
     playlist_names = dict()
     check_dups = list()
 
@@ -49,7 +49,7 @@ def select_playlist(playlist_data):
             print(plist)
         while True:
             print()
-            choice = input('Which playlist would you like to order? ')
+            choice = click.prompt('Playlist to order')
             # Checks for input
             if choice == '':
                 return None
@@ -60,18 +60,14 @@ def select_playlist(playlist_data):
                     username,
                     playlist_names[choice])
                 # Prompts user for a different name
-                text = (f"Default playlist name is '{choice} - Reordered'.  " +
-                        "Hit ENTER to accept, or type a new name: ")
-                name = input(text)
-                # If no name give, uses default
-                if len(name) == 0:
-                    name = choice + ' - Reordered'
+                text = ('Playlist Name')
+                name = click.prompt(text, default=f'{choice} - Reordered')
 
                 return playlist, name
             else:
-                print("Playlist {} not found.".format(choice))
+                print(f'Playlist {choice} not found.')
 
-def get_features(playlist):
+def get_features(playlist, spotify):
     """ Gets track titles, URIs, and attributes from spotify and creates
     a pandas dataframe.
 
@@ -100,27 +96,29 @@ def get_features(playlist):
     tracks = list()
     # Loops through the information on the playlist
     # 'n' refers to the track position
-    for n in range(len(track_data)):
-        # Track names are not held in the same place as acoustic features,
-        # which we are more interested in.
-        track_name = track_data[n]['track']['name']
-        # URI is held there, but we need to pull it out to look up
-        # the acoustic attributes
-        track_uri = track_data[n]['track']['uri']
-        # A list of all of spotify's acoustic attributes for a track,
-        # including 'danceability', 'tempo', etc.
-        feats = spotify.audio_features(track_uri)[0]
-        # Adds name and playlist name to the dict
-        feats['name'] = track_name
-        feats['playlist name'] = playlist_name
-        tracks.append(feats)
+    print('Getting Track Data')
+    with click.progressbar(range(len(track_data))) as bar:
+        for n in bar:
+            # Track names are not held in the same place as acoustic features,
+            # which we are more interested in.
+            track_name = track_data[n]['track']['name']
+            # URI is held there, but we need to pull it out to look up
+            # the acoustic attributes
+            track_uri = track_data[n]['track']['uri']
+            # A list of all of spotify's acoustic attributes for a track,
+            # including 'danceability', 'tempo', etc.
+            feats = spotify.audio_features(track_uri)[0]
+            # Adds name and playlist name to the dict
+            feats['name'] = track_name
+            feats['playlist name'] = playlist_name
+            tracks.append(feats)
 
     # Converts to a dataframe
     tracks_df = pd.DataFrame(tracks)
 
     return tracks_df
 
-def sort_tempo(track_df, period):
+def sort_tempo(track_df, period, spotify):
     """ Returns an organized dataframe based on tempo.
 
     For dance playlists there should be a periodic range in tempos, with
@@ -144,20 +142,23 @@ def sort_tempo(track_df, period):
     x = 0
     track_sections = [[]] * sections
     # Divides the dataframe into sections and stores each as a df in a list
+    
     for n in range(sections):
         track_sections[n] = track_df.iloc[x::sections]
         x += 1
 
     sections_sorted = list()
-    for section in track_sections:
-        # Creates the wave form by splitting each section in half
-        # and reversing one of them.  When re-combined, the result is a
-        # single peak, with troughs at the first and last position.
-        even = section.iloc[::2]
-        odd = section.iloc[1::2]
-        odd = odd.iloc[::-1]
-        # Recombine ascending and descending lines.
-        sections_sorted.append(pd.concat([even, odd]))
+    print('Sorting by tempo')
+    with click.progressbar(track_sections) as bar:
+        for section in bar:
+            # Creates the wave form by splitting each section in half
+            # and reversing one of them.  When re-combined, the result is a
+            # single peak, with troughs at the first and last position.
+            even = section.iloc[::2]
+            odd = section.iloc[1::2]
+            odd = odd.iloc[::-1]
+            # Recombine ascending and descending lines.
+            sections_sorted.append(pd.concat([even, odd]))
 
     # Recombine sections
     all_tracks = pd.concat(sections_sorted)
@@ -170,7 +171,7 @@ def sort_tempo(track_df, period):
 
     return all_tracks
 
-def sort_danceability(track_df, period):
+def sort_danceability(track_df, period, spotify):
     """ Edits the dataframe to include danceability as a metric, slowly
     decreasing as the playlist goes on.
 
@@ -197,17 +198,19 @@ def sort_danceability(track_df, period):
         sublists.append(track_df[n::period].copy())
 
     # Order the sections based on danceability
-    for lst in sublists:
-        # Sort the sections, then preserve the order as a column
-        lst.sort_values(by='danceability', ascending=False, inplace=True)
-        lst['danceability group'] = [x for x in range(len(lst))]
+    print('Sorting by Danceability')
+    with click.progressbar(sublists) as bar:
+        for lst in bar:
+            # Sort the sections, then preserve the order as a column
+            lst.sort_values(by='danceability', ascending=False, inplace=True)
+            lst['danceability group'] = [x for x in range(len(lst))]
 
     all_tracks = pd.concat(sublists)
     all_tracks.sort_values(by=['danceability group', 'tempo group'],
                         inplace=True)
     return all_tracks
 
-def commit_playlist(playlist, userid, name):
+def commit_playlist(playlist, userid, name, spotify):
     """ Creates a new playlist on the user's Spotify account with the
     ordered tracks as given.
 
@@ -254,11 +257,13 @@ def commit_playlist(playlist, userid, name):
                                             playlist_id,
                                             [uri for uri in track_uris])
             # Prints track listing
+            print()
             print('Playlist tracks are:')
             for n in playlist['name']:
                 print(n)
             # Prints URL of playlist
             if playlist_url is not None:
+                print()
                 message = f"Your new playlist '{name}' can be found at: \n {playlist_url}"
                 print(message)
 
@@ -309,26 +314,26 @@ def dancerate(username, period, client_id, client_token, redirect, trace):
     else:
         print("Can't get token for", username)
         return
-    try:    
-        userid = spotify.me()['id']
-        playlist_data = get_user_playlists(userid)
-        if playlist_data is None:
-            print('Leaving Dancerator')
-            return
-        playlist = select_playlist(playlist_data)
-        data = playlist[0]
-        name = playlist[1]
-        playlist = get_features(data)
-        playlist = sort_tempo(playlist, period)
-        playlist = sort_danceability(playlist, period)
-        commit_playlist(playlist, userid, name)
-    
-    except Exception as e:
-        if debug:
-            print(str(e))
-        print('Dancerator encountered an error.')
+    userid = spotify.me()['id']
+    playlist_data = get_user_playlists(userid, spotify)
+    if playlist_data is None:
+        print('Leaving Dancerator')
         return
 
+    playlist = select_playlist(playlist_data, username, spotify)
+    data = playlist[0]
+    name = playlist[1]
+    
+    playlist = get_features(data, spotify)
+    playlist = sort_tempo(playlist, period, spotify)
+    playlist = sort_danceability(playlist, period, spotify)
+
+    if click.confirm('Do you want to create your new playlist?'):
+        commit_playlist(playlist, userid, name, spotify)
+    elif click.confirm('Run again?'):
+        dancerate()
+    else:
+        return
 
 if __name__ == '__main__':
     dancerate()
